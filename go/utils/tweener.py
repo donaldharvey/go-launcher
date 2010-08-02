@@ -153,13 +153,17 @@ class Tweenable(object):
                 self.start_value = self.decode_func(start_value)
                 self.change = [target - start for start, target in zip(self.start_value, target_value)]
 
+            elif isinstance(start_value, list) or isinstance(start_value, tuple):
+                self.change = [target - start for start, target in zip(self.start_value, target_value)]
+
+
 
     def update(self, ease, delta, duration):
         # list means we are dealing with a color triplet
-        if isinstance(self.start_value, list):
+        if isinstance(self.start_value, list) or isinstance(self.start_value, tuple):
             return self.encode_func([ease(delta, self.start_value[i],
                                                  self.change[i], duration)
-                                                             for i in range(3)])
+                                                             for i in range(len(self.start_value))])
         else:
             return self.encode_func(ease(delta, self.start_value, self.change, duration))
 

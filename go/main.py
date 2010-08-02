@@ -11,6 +11,7 @@ import datetime as dt
 from functools import partial
 from go.commands import find_commands
 from threading import Thread
+import gobject
 
 
 RESOURCES_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'resources'))
@@ -94,26 +95,27 @@ class GoResult(object):
         self.thumbnail_opacity = 1.0
         self.opacity = 1.0
 
-
-
     def __hash__(self):
-        return hash(''.join((hash(self.title), hash(self.caption), hash(self.thumbnail), hash(self.callback))))
+        return hash(sum((hash(self.title), hash(self.caption), hash(self.thumbnail), hash(self.callback))))
 
     def __cmp__(self, other):
-        return other.isinstance(self.__class__) and hash(other) == hash(self)
+        return isinstance(other, self.__class__) and hash(other) == hash(self)
 
     def draw(self, cr, x, y):
+        background_colour = self.background_colour
+        background_colour[3] *= self.opacity
+        cr.set_source_rgba(*background_colour)
+        rounded_rectangle(cr, x, y, self.width, self.height, 5, 5)
+        cr.fill()
+        cr.save()
+        cr.set_operator(cairo.OPERATOR_SOURCE)
         rounded_rectangle(cr, x, y, self.width, self.height, 5, 5)
         border_colour = self.border_colour
         border_colour[3] *= self.opacity
         cr.set_source_rgba(*border_colour)
         cr.set_line_width(self.border_width)
         cr.stroke()
-        background_colour = self.background_colour
-        background_colour[3] *= self.opacity
-        cr.set_source_rgba(*background_colour)
-        rounded_rectangle(cr, x, y, self.width, self.height, 5, 5)
-        cr.fill()
+        cr.restore()
         if self._thumbnail is not None:
             cr.set_source_surface(self._thumbnail, x + self.inner_space, y + self.inner_space)
             cr.rectangle(x + self.inner_space, y + self.inner_space, 40, 40)
@@ -152,10 +154,13 @@ class GoResult(object):
 
 
 class GoResultsWindow(gtk.Window):
+    max_results = 4
     def __init__(self, go_window):
         gtk.Window.__init__(self)
         self.go_window = go_window
         self.results = []
+        self.cursor_position = 0
+        self.last_cursor_position = None
         self.set_app_paintable(True)
         self.set_keep_above(True)
         self.set_skip_taskbar_hint(True)
@@ -170,6 +175,39 @@ class GoResultsWindow(gtk.Window):
         self.connect('expose-event', self.draw_window)
         self.do_screen_changed()
 
+    def move_cursor(self, direction_or_newpos='down'):
+        try:
+            last = self.results[self.cursor_position]
+        except IndexError:
+            last = None
+        reset = False
+        if direction_or_newpos == 'down':
+            newpos = self.cursor_position + 1
+        elif direction_or_newpos == 'up':
+            newpos = self.cursor_position - 1
+        else:
+            newpos = direction_or_newpos
+            reset = True
+        self.cursor_position = min(newpos, len(self.results) - 1)
+        self.cursor_position = max(self.cursor_position, 0)
+        try:
+            selected = self.results[self.cursor_position]
+        except IndexError:
+            print 'INDEXERROR!!!!'
+            pass
+        else:
+            if selected is not last or reset == True:
+                normal_border = GoResult('').border_colour
+                normal_bg = GoResult('').background_colour
+                for other in filter(lambda r: r is not selected, self.results):
+                    other.border_colour = normal_border
+                    self.tweener.add_tween(other, background_colour=normal_bg, duration=0.25)
+                new_bg = selected.background_colour[:]
+                new_bg[3] = 0.95
+                selected.border_colour = [1, 1, 1, 1]
+                self.tweener.add_tween(selected, background_colour=new_bg, duration=0.25)
+        self.redraw()
+
 
     def redraw(self):
         """Queue redraw. The redraw will be performed not more often than
@@ -177,7 +215,7 @@ class GoResultsWindow(gtk.Window):
         if self.__drawing_queued == False: #if we are moving, then there is a timeout somewhere already
             self.__drawing_queued = True
             self._last_frame_time = dt.datetime.now()
-            gobject.timeout_add(1000 / self.framerate, self.__interpolate)
+            gobject.timeout_add(1000 / 60, self.__interpolate)
 
     # animation bits
     def __interpolate(self):
@@ -220,10 +258,10 @@ class GoResultsWindow(gtk.Window):
         x = gtk.gdk.screen_get_default().get_width() / 2 - GoResult.width / 2
         y = self.go_window.get_position()[1] + self.go_window.get_size()[1] + 20
         self.move(x, y)
-        self.queue_draw()
 
-        # Later, fade old stuff out and new stuff in; for now, however, simply replace self.results
-        self.results = new_results
+        # TODO: add animation and scrolling
+        self.results = new_results[:self.max_results]
+        self.move_cursor(0)
 
     def do_screen_changed(self, old_screen=None):
         screen = self.get_screen()
@@ -279,9 +317,14 @@ class GoWindow(gtk.Window):
                         command_arg = text.split(' ', 1)[1]
                     except IndexError:
                         command_arg = ''
-                    self.results_window.results[0].run(command_arg)
+                    self.results_window.results[self.results_window.cursor_position].run(command_arg)
                     self.hide()
                     gtk.gdk.keyboard_ungrab()
+            elif e.keyval == 65362: # Up arrow
+                self.results_window.move_cursor('up')
+            elif e.keyval == 65364: # Down arrow
+                self.results_window.move_cursor('down')
+
 
             self._searchbox.do_key_press_event(self._searchbox, e)
             self.queue_draw()
@@ -306,14 +349,23 @@ class GoWindow(gtk.Window):
         pass
 
     def searchbox_changed(self, widget, event=None):
-        """Later, use this event for parsing etc."""
         from utils import search_strings
         text = widget.get_text()
-        results = [{
-            'title': self.commands[c].name,
-            'caption': self.commands[c].caption,
-            'callback': self.commands[c].execute,
-        } for c in search_strings(text, self.commands.keys())]
+        if text:
+            for k in self.commands:
+                if text.startswith(k + ' '):
+                    arg_text = text[len(k) + 1:]
+                    results = self.commands[k].lookup(arg_text)
+                    print results
+                    break
+            else:
+                results = [{
+                    'title': self.commands[c].name,
+                    'caption': self.commands[c].caption,
+                    'callback': self.commands[c].execute,
+                } for c in search_strings(text, self.commands.keys())]
+        else:
+            results = []
 
         self.results_window.update_results(results)
 
