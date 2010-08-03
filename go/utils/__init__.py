@@ -8,19 +8,30 @@ def search_non_contiguous_strings(search, strings_to_search, case_sensitive=Fals
     if not case_sensitive:
         search = search.lower()
     for string in strings_to_search:
-        string = string.lower()
-        oldindex = 0
-        for char in search:
-            result = string.find(char, oldindex)
+        lower_string = string.lower()
+        oldindex = -1
+        longest_substr = 1
+        longest_substr_counter = 1
+        longest_substr_index = 0
+        for charindex, char in enumerate(search):
+            result = lower_string.find(char, oldindex + 1)
             if result == -1:
                 break
             else:
+                if result - 1 == oldindex and charindex != 0: # Oldindex starts at 0, rather than -1
+                    longest_substr_counter += 1
+                    longest_substr_index = result - longest_substr_counter + 1
+                    longest_substr = max(longest_substr_counter, longest_substr)
+                else:
+                    longest_substr_counter = 1
+                    longest_substr_index = result
                 oldindex = result
         else:
-            print 'Levenshtein distance between %s and %s is %s' % (search, string, lev(search, string))
-            matches.append(string)
-    matches.sort(key=lambda k: lev(k, search))
-    return matches
+            print 'Longest substr', string[longest_substr_index:longest_substr_index+longest_substr]
+            matches.append((string, longest_substr_index, longest_substr))
+    matches.sort(key=lambda k: (k[1], -1 * k[2]))
+    print 'Search string "%s" produced the following:' % search, matches
+    return map(lambda m: m[0], matches)
 
 def search_strings(search, strings_to_search, case_sensitive=False):
     matches = []

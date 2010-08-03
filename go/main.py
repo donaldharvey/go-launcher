@@ -202,7 +202,6 @@ class GoResultsWindow(gtk.Window):
         try:
             selected = self.results[self.cursor_position]
         except IndexError:
-            print 'INDEXERROR!!!!'
             pass
         else:
             if selected is not last or reset == True:
@@ -365,23 +364,31 @@ class GoWindow(gtk.Window):
     def searchbox_changed(self, widget, event=None):
         from utils import search_strings
         text = widget.get_text()
-        if text:
-            for k in self.commands:
-                if text.startswith(k + ' '):
-                    arg_text = text[len(k) + 1:]
-                    results = self.commands[k].lookup(arg_text)
-                    print results
-                    break
-            else:
-                results = [{
-                    'title': self.commands[c].name,
-                    'caption': self.commands[c].caption,
-                    'callback': self.commands[c].execute,
-                } for c in search_strings(text, self.commands.keys())]
-        else:
-            results = []
 
-        self.results_window.update_results(results)
+        def do_lookup(text):
+            if text:
+                for k in self.commands:
+                    if text.startswith(k + ' '):
+                        arg_text = text[len(k) + 1:]
+                        results = self.commands[k].lookup(arg_text)
+                        print results
+                        break
+                else:
+                    results = [{
+                        'title': self.commands[c].nice_name,
+                        'caption': self.commands[c].caption,
+                        'callback': self.commands[c].execute,
+                        'thumbnail': self.commands[c].icon
+                    } for c in search_strings(text, self.commands.keys())]
+                    results.extend(self.commands['launch'].lookup(text))
+            else:
+                results = []
+            self.results_window.update_results(results)
+
+        # Make sure calling lookup doesn't block the main searchbox draw.
+        gobject.idle_add(do_lookup, text, priority=gobject.PRIORITY_LOW)
+
+
 
 
     def do_screen_changed(self, old_screen=None):
