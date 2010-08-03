@@ -1,9 +1,10 @@
 import os
 import sys
 from inspect import isclass
-
 class Command(object):
     name = ''
+    nice_name = ''
+    icon = None
     aliases = []
     def lookup(self, search_string):
         raise NotImplementedError
@@ -25,3 +26,4 @@ def find_commands():
 
 if __name__ == '__main__':
     c = find_commands()
+

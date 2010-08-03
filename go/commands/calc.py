@@ -12,6 +12,8 @@ class SimpleCalcCommand(Command):
     name = 'calc'
     nice_name = 'Calculate'
     caption = 'Calculate simple operations.'
+    def __init__(self):
+        self._last_result = None
     def _copy_to_clipboard(self, value):
         clipboard = gtk.clipboard_get('CLIPBOARD')
         clipboard.set_text(value)
@@ -33,7 +35,9 @@ class SimpleCalcCommand(Command):
             'Decimal': Decimal
         }
         context.update(math.__dict__)
-        return eval(tokenize.untokenize(result), context, {})
+        result = eval(tokenize.untokenize(result), context, {})
+        self._last_result = result
+        return result
 
     def lookup(self, value):
         try:
@@ -41,11 +45,21 @@ class SimpleCalcCommand(Command):
             return [{
                 'title': str(result),
                 'caption': 'Copy this result to the clipboard.',
-                'callback': partial(self._copy_to_clipboard, value),
+                'callback': partial(self._copy_to_clipboard, str(result)),
             }]
-        except Exception:
-            import traceback; traceback.print_exc()
-            return []
+        except Exception, e:
+            if isinstance(e, SyntaxError) and getattr(e, 'msg') == 'unexpected EOF while parsing':
+                if self._last_result is not None:
+                    return [{
+                        'title': str(self._last_result),
+                        'caption': 'Copy this result to the clipboard.',
+                        'callback': partial(self._copy_to_clipboard, str(self._last_result)),
+                    }]
+            return [{
+                'title': '?',
+                'caption': 'There\'s been a problem with your calculation!',
+                'callback': lambda v: None,
+            }]
 
     def execute(self, value):
         result = self._eval(value)
