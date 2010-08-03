@@ -14,6 +14,7 @@ from threading import Thread
 import gobject
 
 
+
 RESOURCES_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'resources'))
 def rounded_rectangle(cr, x, y, w, h, radius_x=5, radius_y=5):
 	"""Draw a rectangle with rounded corners according to radius_x and radius_y."""
@@ -59,7 +60,7 @@ class GoResult(object):
         self.thumbnail = thumbnail
         self.callback = callback
         self._thumbnail = None
-        if self.thumbnail is not None:
+        if self.thumbnail is not None and not isinstance(self.thumbnail, gtk.gdk.Pixbuf):
             self._thumbnail_loader = gtk.gdk.PixbufLoader()
             def _pb_loader_size_prepared(pb_loader, width, height):
                 if height > width:
@@ -86,6 +87,15 @@ class GoResult(object):
                 self._thumbnail_real = self._thumbnail
             self._thumbnail_loader.write(self._thumbnail_real.read())
             self._thumbnail_loader.close()
+        elif isinstance(self.thumbnail, gtk.gdk.Pixbuf):
+            self._thumbnail = cairo.ImageSurface(0, self.image_size, self.image_size)
+            cr = cairo.Context(self._thumbnail)
+            gtk_cr = gtk.gdk.CairoContext(cr)
+            gtk_cr.set_source_pixbuf(self.thumbnail, 0, 0)
+            x = self.image_size / 2 - self.thumbnail.get_width() / 2
+            y = self.image_size / 2 - self.thumbnail.get_height() / 2
+            gtk_cr.rectangle(x, y, max(self.thumbnail.get_width(), self.image_size), max(self.thumbnail.get_height(), self.image_size))
+            gtk_cr.fill()
 
         self.border_colour = [0.1, 0.1, 0.1, 0.75]
         self.border_width = 1
@@ -134,20 +144,19 @@ class GoResult(object):
         cr.set_source_rgba(*title_colour)
         pg.show_layout(pgl)
 
-        pgl = pgl.copy()
-        pgl.set_font_description(self.caption_font)
-        pgl.set_markup(self.caption)
-        cr.move_to(text_space_left, y + self.height - pgl.get_pixel_size()[1] - self.inner_space)
-        caption_colour = self.caption_colour
-        caption_colour[3] *= self.opacity
-        cr.set_source_rgba(*caption_colour)
+        if self.caption is not None:
+            pgl = pgl.copy()
+            pgl.set_font_description(self.caption_font)
+            pgl.set_markup(self.caption)
+            cr.move_to(text_space_left, y + self.height - pgl.get_pixel_size()[1] - self.inner_space)
+            caption_colour = self.caption_colour
+            caption_colour[3] *= self.opacity
+            cr.set_source_rgba(*caption_colour)
 
-        pg.show_layout(pgl)
+            pg.show_layout(pgl)
 
     def run(self, exec_string):
-        t = Thread(target=self.callback, args=(exec_string,))
-        t.daemon = True
-        t.start()
+        gobject.idle_add(self.callback, exec_string)
 
 
 
@@ -202,10 +211,14 @@ class GoResultsWindow(gtk.Window):
                 for other in filter(lambda r: r is not selected, self.results):
                     other.border_colour = normal_border
                     self.tweener.add_tween(other, background_colour=normal_bg, duration=0.25)
+
                 new_bg = selected.background_colour[:]
                 new_bg[3] = 0.95
                 selected.border_colour = [1, 1, 1, 1]
-                self.tweener.add_tween(selected, background_colour=new_bg, duration=0.25)
+                if not reset:
+                    self.tweener.add_tween(selected, background_colour=new_bg, duration=0.25)
+                else:
+                    selected.background_colour = new_bg
         self.redraw()
 
 
@@ -249,7 +262,7 @@ class GoResultsWindow(gtk.Window):
             c.restore()
 
     def update_results(self, new_results):
-        new_results = [GoResult(r['title'], r.get('caption'), r.get('thumbnail'), r.get('callback')) for r in new_results]
+        new_results = [GoResult(r['title'], r.get('caption'), r.get('thumbnail'), r.get('callback')) for r in new_results[:self.max_results]]
         #combined_results_len = len(self.results)
         #for result in new_results:
         #    if result not in self.results:
@@ -260,7 +273,7 @@ class GoResultsWindow(gtk.Window):
         self.move(x, y)
 
         # TODO: add animation and scrolling
-        self.results = new_results[:self.max_results]
+        self.results = new_results
         self.move_cursor(0)
 
     def do_screen_changed(self, old_screen=None):
@@ -320,13 +333,14 @@ class GoWindow(gtk.Window):
                     self.results_window.results[self.results_window.cursor_position].run(command_arg)
                     self.hide()
                     gtk.gdk.keyboard_ungrab()
+
             elif e.keyval == 65362: # Up arrow
                 self.results_window.move_cursor('up')
             elif e.keyval == 65364: # Down arrow
                 self.results_window.move_cursor('down')
 
 
-            self._searchbox.do_key_press_event(self._searchbox, e)
+            self._searchbox.emit('key-press-event', e)
             self.queue_draw()
         self.connect('key-press-event', cb)
         self.connect('key-release-event', lambda w, e: self._searchbox.do_key_release_event(self._searchbox, e))
