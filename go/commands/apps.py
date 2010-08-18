@@ -5,7 +5,8 @@ from functools import partial
 import gtk
 import gio
 import gmenu
-import subprocess
+import glib
+import shlex
 class AppLaunchCommand(Command):
     name = 'launch'
     aliases = ['run']
@@ -20,7 +21,9 @@ class AppLaunchCommand(Command):
 
     def exec_app(self, command, argv=''):
         print 'Launching %s!' % command
-        subprocess.Popen(' '.join((command, argv)), shell=True)
+        real_argv = [command] + shlex.split(argv)
+        print real_argv
+        glib.spawn_async(real_argv, flags=glib.SPAWN_SEARCH_PATH | glib.SPAWN_STDOUT_TO_DEV_NULL | glib.SPAWN_STDERR_TO_DEV_NULL)
 
     def lookup(self, search_string):
         if search_string == '':

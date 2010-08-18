@@ -12,8 +12,10 @@ from functools import partial
 from go.commands import find_commands
 from threading import Thread
 import gobject
+from go.keybindings import KeyBindingManager
+import signal
 
-
+key_binding_mgr = KeyBindingManager()
 
 RESOURCES_FOLDER = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'resources'))
 def rounded_rectangle(cr, x, y, w, h, radius_x=5, radius_y=5):
@@ -54,12 +56,14 @@ class GoResult(object):
     title_font = pango.FontDescription('Droid Sans 13')
     caption_font = pango.FontDescription('Droid Sans 10')
 
-    def __init__(self, title, caption=None, thumbnail=None, callback=None):
+    def __init__(self, title, caption=None, thumbnail=None, callback=None, x=0, y=0):
         self.title = title
         self.caption = caption
         self.thumbnail = thumbnail
         self.callback = callback
         self._thumbnail = None
+        self.x = x
+        self.y = y
         if self.thumbnail is not None and not isinstance(self.thumbnail, gtk.gdk.Pixbuf):
             self._thumbnail_loader = gtk.gdk.PixbufLoader()
             def _pb_loader_size_prepared(pb_loader, width, height):
@@ -111,7 +115,9 @@ class GoResult(object):
     def __cmp__(self, other):
         return isinstance(other, self.__class__) and hash(other) == hash(self)
 
-    def draw(self, cr, x, y):
+    def draw(self, cr):
+        x = self.x
+        y = self.y
         background_colour = self.background_colour
         background_colour[3] *= self.opacity
         cr.set_source_rgba(*background_colour)
@@ -169,6 +175,7 @@ class GoResultsWindow(gtk.Window):
         self.go_window = go_window
         self.results = []
         self.cursor_position = 0
+        self.offset = 0
         self.last_cursor_position = None
         self.set_app_paintable(True)
         self.set_keep_above(True)
@@ -183,6 +190,14 @@ class GoResultsWindow(gtk.Window):
         self.tweener = Tweener(0.5, Easing.Cubic.ease_in_out)
         self.connect('expose-event', self.draw_window)
         self.do_screen_changed()
+
+    @property
+    def height(self):
+        return self.get_allocation().height
+
+    @property
+    def width(self):
+        return self.get_allocation().width
 
     def move_cursor(self, direction_or_newpos='down'):
         try:
@@ -205,6 +220,30 @@ class GoResultsWindow(gtk.Window):
             pass
         else:
             if selected is not last or reset == True:
+                #    print 'Moving down!'
+                #    for result in self.results:
+                #        # how far between selected.real_y and where it needs to be?
+                #        move_to = selected.real_y - self.height
+                #        print 'Moving to %s - %s = %s' % (selected.real_y, self.height, move_to)
+                #        self.tweener.add_tween(result, y=result.y + move_to, duration=0.25)
+                #elif selected.real_y < self.get_allocation().y:
+                #    print 'Moving up!'
+                #    for result in self.results:
+                #        self.tweener.add_tween(result, y=0 - (selected.real_y), duration=0.25)
+                if selected.y + GoResult.height > self.height:
+                    new_offset = max(0, self.cursor_position - 3) * (GoResult.height + GoResult.spacing)
+                    try:
+                        self.tweener.remove_tween(self._move_tween)
+                    except AttributeError:
+                        pass
+                    self._move_tween = self.tweener.add_tween(self, offset=new_offset, duration=0.25)
+                elif selected.y < self.get_allocation().y:
+                    new_offset = self.cursor_position * (GoResult.height + GoResult.spacing)
+                    try:
+                        self.tweener.remove_tween(self._move_tween)
+                    except AttributeError:
+                        pass
+                    self._move_tween = self.tweener.add_tween(self, offset=new_offset, duration=0.25)
                 normal_border = GoResult('').border_colour
                 normal_bg = GoResult('').background_colour
                 for other in filter(lambda r: r is not selected, self.results):
@@ -248,25 +287,32 @@ class GoResultsWindow(gtk.Window):
         c.set_operator(cairo.OPERATOR_SOURCE)
         c.paint()
 
+        new_height = min(len(self.results), self.max_results) * (GoResult.height + GoResult.spacing)
+        if self.height != new_height:
+            self.resize(GoResult.width, new_height)
+
         c.set_operator(cairo.OPERATOR_OVER)
+        c.rectangle(self.get_allocation().x, self.get_allocation().y, self.width, new_height)
+        c.clip()
         x = 0
         for number, result in enumerate(self.results):
-            y = number * GoResult.height
-            if y:
-                y += GoResult.spacing * number
+            y = (number * (GoResult.height + GoResult.spacing)) - self.offset
+            result.x = x
+            result.y = y
+            #if self.cursor_position - 5 < number < self.cursor_position + 5:
             c.save()
             c.rectangle(x, y, GoResult.width, GoResult.height)
             c.clip()
-            result.draw(c, x, y)
+            result.draw(c)
             c.restore()
 
     def update_results(self, new_results):
-        new_results = [GoResult(r['title'], r.get('caption'), r.get('thumbnail'), r.get('callback')) for r in new_results[:self.max_results]]
+        new_results = [GoResult(r['title'], r.get('caption'), r.get('thumbnail'), r.get('callback')) for r in new_results[:]]
         #combined_results_len = len(self.results)
         #for result in new_results:
         #    if result not in self.results:
         #        combined_results_len += 1
-        self.resize(GoResult.width, len(new_results) * (GoResult.height + GoResult.spacing))
+        self.resize(GoResult.width, self.max_results * (GoResult.height + GoResult.spacing))
         x = gtk.gdk.screen_get_default().get_width() / 2 - GoResult.width / 2
         y = self.go_window.get_position()[1] + self.go_window.get_size()[1] + 20
         self.move(x, y)
@@ -347,10 +393,33 @@ class GoWindow(gtk.Window):
 
         self.do_screen_changed(self)
         self.results_window = GoResultsWindow(self)
-        self.show()
+        self.shown = False
+        key_binding_mgr.add_binding('<Alt>space', self.toggle)
+
+    def main(self):
+        gtk.gdk.threads_init()
+        key_binding_mgr.start()
+        def _sig_handler(signum, frame):
+            print 'Ctrl-C pressed!!!'
+            sys.exit(0)
+        signal.signal(signal.SIGINT, _sig_handler)
+        gtk.main()
+
+    def show(self):
+        self.results_window.show()
+        self.shown = True
+        return gtk.Window.show(self)
+
+    def toggle(self):
+        if self.shown:
+            self.hide()
+        else:
+            self.show()
+
 
     def hide(self):
         self.results_window.hide()
+        self.shown = False
         return gtk.Window.hide(self)
 
     def do_realize(self):
@@ -476,6 +545,4 @@ class GoWindow(gtk.Window):
 
 if __name__ == '__main__':
     g = GoWindow()
-    g.present()
-    g.results_window.show()
-    gtk.main()
+    g.main()
