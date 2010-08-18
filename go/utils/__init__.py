@@ -43,3 +43,28 @@ def search_strings(search, strings_to_search, case_sensitive=False):
             matches.append(string)
     matches.sort()
     return matches
+
+def rounded_rectangle(cr, x, y, w, h, radius_x=5, radius_y=5):
+	"""Draw a rectangle with rounded corners according to radius_x and radius_y."""
+	# Following code is from http://www.cairographics.org/cookbook/roundedrectangles/
+	ARC_TO_BEZIER = 0.55228475
+	if radius_x > w - radius_x:
+		radius_x = w / 2
+	if radius_y > h - radius_y:
+		radius_y = h / 2
+
+	#approximate (quite close) the arc using a bezier curve
+	c1 = ARC_TO_BEZIER * radius_x
+	c2 = ARC_TO_BEZIER * radius_y
+
+	cr.new_path()
+	cr.move_to( x + radius_x, y)
+	cr.rel_line_to(w - 2 * radius_x, 0.0)
+	cr.rel_curve_to(c1, 0.0, radius_x, c2, radius_x, radius_y)
+	cr.rel_line_to(0, h - 2 * radius_y)
+	cr.rel_curve_to(0.0, c2, c1 - radius_x, radius_y, -radius_x, radius_y)
+	cr.rel_line_to(-w + 2 * radius_x, 0)
+	cr.rel_curve_to(-c1, 0, -radius_x, -c2, -radius_x, -radius_y)
+	cr.rel_line_to(0, -h + 2 * radius_y)
+	cr.rel_curve_to(0.0, -c2, radius_x - c1, -radius_y, radius_x, -radius_y)
+	cr.close_path()
